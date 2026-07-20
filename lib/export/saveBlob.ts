@@ -1,8 +1,8 @@
 /**
  * lib/export/saveBlob.ts 
  *
- * Saves a blob as a file via a synthetic <a download> click — NOT
- * navigator.share (§1.6). Creates an object URL, clicks a temporary anchor,
+ * For desktop saves a blob as a file via a synthetic <a download> click — NOT
+ * navigator.share. Creates an object URL, clicks a temporary anchor,
  * removes it, then revokes the URL after a delay so the download can start.
  */
 export function saveBlob(blob: Blob, filename: string) {

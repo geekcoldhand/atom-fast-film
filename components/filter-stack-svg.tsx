@@ -1,19 +1,18 @@
 "use client";
 
 /**
- * components/filter-stack-svg.tsx  (the unified engine)
+ * components/filter-stack-svg.tsx (the unified rendering engine)
  *
- * ONE React component. Native <svg> + <rect>/<pattern>/<image>/<text>,
- * styled with mix-blend-mode via inline style (SVG supports the CSS
- * Compositing spec identically to HTML). No <foreignObject>, ever (§3.1).
+ * One React component, native <svg> + <rect>/<pattern>/<image>/<text>,
+ * styled with mix-blend-mode via inline style. No <foreignObject> — that
+ * would permanently taint the export canvas.
  *
- * - Preview mounts this directly in the page, sized responsively.
- * - Export mounts the EXACT same component off-screen at natural resolution,
- *   serializes it with XMLSerializer, and rasterizes the string.
+ * - The live preview mounts this directly in the page.
+ * - Export mounts the exact same component off-screen at full resolution,
+ *   serializes it with XMLSerializer, and rasterizes the result.
  *
- * There is one component, one file, one place to add a layer. Layer order
- * :  base → blueBase → cyanLift → reflection → grain → verticals →
- * shadowControl → stamp.
+ * Layer paint order: base photo -> blueBase -> cyanLift -> reflection ->
+ * grain -> verticals -> shadowControl -> date stamp.
  */
 
 import { useLayoutEffect, useRef, useState } from "react";
@@ -39,11 +38,22 @@ interface FilterStackSvgProps {
 	/** unique suffix so multiple instances (preview + off-screen export) don't
 	 *  collide on <defs> ids in the same document. */
 	idSuffix?: string;
+	/**
+	 * Display-only: caps the rendered height so a tall portrait photo stays
+	 * inside the viewport on small screens instead of pushing the controls
+	 * off-screen. Must default to false and NEVER be passed from the export
+	 * path (offscreenRenderer.tsx) — this component's markup is serialized
+	 * verbatim for export, so any inline style set here would be baked into
+	 * the exported SVG too. The width/height props (natural pixel
+	 * resolution) are unaffected either way; this only scales the on-screen
+	 * CSS box.
+	 */
+	constrainToViewport?: boolean;
 }
 
-/** monospace width estimate — a good initial value so the stamp never flashes
- *  overlapped before getComputedTextLength refines it (§2.5 / §3.3). */
-function monoEstimate(text: string, fontSize: number) {
+/** Rough monospace width estimate used as the initial stamp position before
+ *  `getComputedTextLength` (below) measures the real rendered width. */
+function estimateMonospaceTextWidth(text: string, fontSize: number) {
 	return text.length * fontSize * 0.6;
 }
 
@@ -55,34 +65,39 @@ export function FilterStackSvg({
 	showStamp = true,
 	dateStr,
 	idSuffix = "live",
+	constrainToViewport = false,
 }: FilterStackSvgProps) {
 	const config = buildFilterConfig(controls);
 
-	const minSide = Math.min(width, height);
-	const fontSize = Math.min(
+	const stampFrameShorterSide = Math.min(width, height);
+	const stampFontSize = Math.min(
 		STAMP.fontSizeMax,
-		Math.max(STAMP.fontSizeMin, minSide * STAMP.fontSizeFactor)
+		Math.max(STAMP.fontSizeMin, stampFrameShorterSide * STAMP.fontSizeFactor)
 	);
-	const gapPx = fontSize * STAMP.gapEm;
-	const rightX = width - width * STAMP.rightPercent;
-	const baselineY = height - height * STAMP.bottomPercent;
-	const date = dateStr ?? "";
+	const stampGapPx = stampFontSize * STAMP.gapEm;
+	const stampRightX = width - width * STAMP.rightPercent;
+	const stampBaselineY = height - height * STAMP.bottomPercent;
+	const dateText = dateStr ?? "";
 
-	// Measure the date's real rendered width off the live node (§3.3), falling
-	// back to a monospace estimate until the layout effect runs.
-	const dateRef = useRef<SVGTextElement>(null);
-	const [dateLen, setDateLen] = useState(() => monoEstimate(date, fontSize));
+	// Measure the date's real rendered width off the live text node, falling
+	// back to a monospace estimate until the layout effect below runs.
+	const dateTextRef = useRef<SVGTextElement>(null);
+	const [dateTextWidth, setDateTextWidth] = useState(() =>
+		estimateMonospaceTextWidth(dateText, stampFontSize)
+	);
 
 	useLayoutEffect(() => {
-		if (dateRef.current) {
+		if (dateTextRef.current) {
 			try {
-				const len = dateRef.current.getComputedTextLength();
-				if (len && Math.abs(len - dateLen) > 0.5) setDateLen(len);
+				const measuredWidth = dateTextRef.current.getComputedTextLength();
+				if (measuredWidth && Math.abs(measuredWidth - dateTextWidth) > 0.5) {
+					setDateTextWidth(measuredWidth);
+				}
 			} catch {
-				/* getComputedTextLength can throw if not yet laid out; keep estimate */
+				/* getComputedTextLength can throw before layout has run; keep the estimate */
 			}
 		}
-	}, [date, fontSize, dateLen]);
+	}, [dateText, stampFontSize, dateTextWidth]);
 
 	const grainId = `atom-grain-${idSuffix}`;
 	const verticalsId = `atom-verticals-${idSuffix}`;
@@ -94,9 +109,15 @@ export function FilterStackSvg({
 		0.5,
 		verticalsStripWidth * VERTICALS.lineFraction
 	);
-	const grainTile = (width * GRAIN.tilePercent) / 100;
+	// Guard against a transient 0/NaN width (e.g. before the source image has
+	// finished loading) producing an invalid, zero-size pattern tile.
+	const rawGrainTileSize = (width * GRAIN.tilePercent) / 100;
+	const grainTileSize =
+		Number.isFinite(rawGrainTileSize) && rawGrainTileSize > 0
+			? rawGrainTileSize
+			: 1;
 
-	const gradToStops = (stops: GradientStop[], color: string) =>
+	const renderGradientStops = (stops: GradientStop[], color: string) =>
 		stops.map((s, i) => (
 			<stop
 				key={i}
@@ -112,20 +133,24 @@ export function FilterStackSvg({
 			width={width}
 			height={height}
 			xmlns="http://www.w3.org/2000/svg"
-			style={{ display: "block", width: "100%", height: "auto" }}
+			style={
+				constrainToViewport
+					? { display: "block", width: "auto", height: "auto", maxWidth: "100%", maxHeight: "60vh" }
+					: { display: "block", width: "100%", height: "auto" }
+			}
 			preserveAspectRatio="xMidYMid meet"
 		>
 			<defs>
 				<pattern
 					id={grainId} //grain
 					patternUnits="userSpaceOnUse"
-					width={grainTile}
-					height={grainTile}
+					width={grainTileSize}
+					height={grainTileSize}
 				>
 					<image
 						href={GRAIN_DATA_URI}
-						width={grainTile}
-						height={grainTile}
+						width={grainTileSize}
+						height={grainTileSize}
 						preserveAspectRatio="none"
 					/>
 				</pattern>
@@ -146,14 +171,14 @@ export function FilterStackSvg({
 				</pattern>
 
 				<linearGradient id={reflectionId} x1="0" y1="0" x2="0" y2="1">
-					{gradToStops(
+					{renderGradientStops(
 						config.layers.reflection.stops,
 						config.layers.reflection.color
 					)}
 				</linearGradient>
 
 				<radialGradient id={shadowId} cx="0.5" cy="0.5" r="0.75">
-					{gradToStops(
+					{renderGradientStops(
 						config.layers.shadowControl.stops,
 						config.layers.shadowControl.color
 					)}
@@ -238,30 +263,30 @@ export function FilterStackSvg({
 			/>
 
 			{/* stamp */}
-			{showStamp && date && (
-				<g transform={`rotate(${STAMP.rotationDeg} ${rightX} ${baselineY})`}>
+			{showStamp && dateText && (
+				<g transform={`rotate(${STAMP.rotationDeg} ${stampRightX} ${stampBaselineY})`}>
 					<text
-						x={rightX - dateLen - gapPx}
-						y={baselineY}
+						x={stampRightX - dateTextWidth - stampGapPx}
+						y={stampBaselineY}
 						textAnchor="end"
 						fill={STAMP.ink}
 						fontFamily={STAMP.fontFamily}
-						fontSize={fontSize}
+						fontSize={stampFontSize}
 						style={{ userSelect: "none", fontWeight: 500 }}
 					>
 						{STAMP.wordmark}
 					</text>
 					<text
-						ref={dateRef}
-						x={rightX}
-						y={baselineY}
+						ref={dateTextRef}
+						x={stampRightX}
+						y={stampBaselineY}
 						textAnchor="end"
 						fill={STAMP.ink}
 						fontFamily={STAMP.fontFamily}
-						fontSize={fontSize}
+						fontSize={stampFontSize}
 						style={{ userSelect: "none" }}
 					>
-						{date}
+						{dateText}
 					</text>
 				</g>
 			)}

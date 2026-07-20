@@ -3,7 +3,7 @@
  *
  * Orchestration only — no rendering logic lives here. The actual export
  * render (native SVG, from the same rendering/filterConfig.ts values the
- * preview uses) happens in offscreenRenderer.tsx (§2.2).
+ * preview uses) happens in offscreenRenderer.tsx.
  */
 
 import { renderExportDataUrl } from "./offscreenRenderer"

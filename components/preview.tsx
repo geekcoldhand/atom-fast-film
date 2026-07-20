@@ -31,7 +31,13 @@ export function Preview({ imgSrc, size, controls, dateStr, onFile }: PreviewProp
   return (
     <main className="flex flex-1 items-center justify-center overflow-hidden p-4 sm:p-6">
       {imgSrc && size ? (
-        <div className="max-h-full w-full max-w-[520px] overflow-hidden rounded-lg shadow-[0_0_60px_-15px_oklch(0.74_0.13_220/0.35)] ring-1 ring-atom-line/60">
+        // Display-only sizing: the SVG's own max-height (set below, in
+        // FilterStackSvg) keeps the preview inside the viewport on small
+        // screens without ever resampling the underlying image. Export
+        // always rasterizes at the image's full natural width/height (see
+        // offscreenRenderer.tsx), so a smaller preview never reduces the
+        // exported resolution.
+        <div className="flex w-full max-w-[520px] items-center justify-center overflow-hidden rounded-lg shadow-[0_0_60px_-15px_oklch(0.74_0.13_220/0.35)] ring-1 ring-atom-line/60">
           <FilterStackSvg
             imgSrc={imgSrc}
             controls={controls}
@@ -39,6 +45,7 @@ export function Preview({ imgSrc, size, controls, dateStr, onFile }: PreviewProp
             height={size.h}
             dateStr={dateStr}
             idSuffix="live"
+            constrainToViewport
           />
         </div>
       ) : (

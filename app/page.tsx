@@ -1,11 +1,12 @@
 "use client";
 
 /**
- * ATOM — Cyanotype Film Filter (App shell, Setup App.jsx)
+ * app/page.tsx — application shell
  *
- * Owns app state (imgSrc, controls, processing) and the four handlers the
- * spec's App wires up. Preview + export both render the one FilterStackSvg
- * engine; this file never touches paint math.
+ * Owns all app state (loaded photo, slider values, export-in-progress flag)
+ * and the handlers for loading a file, resetting, and exporting. Preview and
+ * export both render the same FilterStackSvg engine; this file never touches
+ * paint math itself.
  */
 
 import { useCallback, useMemo, useState } from "react";
@@ -21,82 +22,89 @@ import {
 import { renderToBlob } from "@/lib/export/renderToBlob";
 import { saveBlob } from "@/lib/export/saveBlob";
 
-function formatDate(d: Date) {
-	const p = (n: number) => String(n).padStart(2, "0");
-	return `${d.getFullYear()}.${p(d.getMonth() + 1)}.${p(d.getDate())}`;
+function formatDateStamp(date: Date) {
+	const pad2 = (n: number) => String(n).padStart(2, "0");
+	return `${date.getFullYear()}.${pad2(date.getMonth() + 1)}.${pad2(
+		date.getDate()
+	)}`;
 }
 
 export default function Page() {
-	const [imgSrc, setImgSrc] = useState<string | null>(null);
-	const [size, setSize] = useState<{ w: number; h: number } | null>(null);
+	const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(null);
+	const [photoSize, setPhotoSize] = useState<{ w: number; h: number } | null>(
+		null
+	);
 	const [controls, setControls] = useState<ControlsType>({
 		...DEFAULT_CONTROLS,
 	});
-	const [isProcessing, setIsProcessing] = useState(false);
+	const [isExporting, setIsExporting] = useState(false);
 
-	const dateStr = useMemo(() => formatDate(new Date()), []);
+	const dateStr = useMemo(() => formatDateStamp(new Date()), []);
 
 	const updateControl = useCallback((key: ControlKey, value: number) => {
 		setControls((prev) => ({ ...prev, [key]: value }));
 	}, []);
 
-	const handleFile = useCallback((file: File) => {
+	const handleFileSelected = useCallback((file: File) => {
 		const reader = new FileReader();
 		reader.onload = () => {
 			const dataUrl = reader.result as string;
 			// Measure natural dimensions so the SVG viewBox matches the source.
-			const img = new Image();
-			img.crossOrigin = "anonymous";
-			img.onload = () => {
-				setSize({ w: img.naturalWidth, h: img.naturalHeight });
-				setImgSrc(dataUrl);
+			const probeImage = new Image();
+			probeImage.crossOrigin = "anonymous";
+			probeImage.onload = () => {
+				setPhotoSize({
+					w: probeImage.naturalWidth,
+					h: probeImage.naturalHeight,
+				});
+				setPhotoDataUrl(dataUrl);
 			};
-			img.src = dataUrl;
+			probeImage.src = dataUrl;
 		};
 		reader.readAsDataURL(file);
 	}, []);
 
 	const handleReset = useCallback(() => {
-		setImgSrc(null);
-		setSize(null);
+		setPhotoDataUrl(null);
+		setPhotoSize(null);
 	}, []);
 
 	const handleExport = useCallback(async () => {
-		if (!imgSrc || !size || isProcessing) return;
-		setIsProcessing(true);
+		if (!photoDataUrl || !photoSize || isExporting) return;
+		setIsExporting(true);
 		try {
 			const blob = await renderToBlob({
-				imgSrc,
+				imgSrc: photoDataUrl,
 				controls,
-				width: size.w,
-				height: size.h,
+				width: photoSize.w,
+				height: photoSize.h,
 				dateStr,
 			});
 			saveBlob(blob, `atom-${dateStr.replace(/\./g, "")}.jpg`);
 		} catch (err) {
-			console.log("[v0] export failed:", (err as Error).message);
+			console.error("Export failed:", (err as Error).message);
 		} finally {
-			setIsProcessing(false);
+			setIsExporting(false);
 		}
-	}, [imgSrc, size, controls, dateStr, isProcessing]);
+	}, [photoDataUrl, photoSize, controls, dateStr, isExporting]);
 
 	return (
-		<div className="flex h-dvh flex-col bg-atom-bg">
+		<div className="flex h-dvh flex-col bg-atom-bg overflow-x-hidden">
 			<Header
-				hasImage={!!imgSrc}
-				processing={isProcessing}
+				hasImage={!!photoDataUrl}
+				processing={isExporting}
 				onSave={handleExport}
 			/>
 
 			<Preview
-				imgSrc={imgSrc}
-				size={size}
+				imgSrc={photoDataUrl}
+				size={photoSize}
 				controls={controls}
 				dateStr={dateStr}
-				onFile={handleFile}
+				onFile={handleFileSelected}
 			/>
 
-			{imgSrc && (
+			{photoDataUrl && (
 				<div className="flex justify-center px-4 pb-1">
 					<button
 						type="button"
@@ -110,7 +118,7 @@ export default function Page() {
 
 			<Controls controls={controls} onChange={updateControl} />
 
-			{isProcessing && <ProcessingOverlay />}
+			{isExporting && <ProcessingOverlay />}
 		</div>
 	);
 }

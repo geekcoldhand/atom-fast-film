@@ -67,7 +67,7 @@ function Slider({
 
   return (
     <label className="flex flex-col gap-2">
-      {/* label row — flex row so the value sits opposite the name (§7.7) */}
+      {/* label row: name on the left, live value on the right */}
       <div className="flex items-center justify-between">
         <span className="font-mono text-xs uppercase tracking-[0.18em] text-atom-text">
           {CONTROL_LABELS[controlKey]}

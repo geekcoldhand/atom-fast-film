@@ -2,18 +2,16 @@
  * rendering/filterConfig.ts
  *
  * Pure function — no DOM, no React. Raw 0-100 slider values in, fully
- * resolved layer config out (opacity, color, gradient stops, blend mode).
- * This is the half of "one engine" that guarantees a slider's *behavior*
- * can never desync between preview and export: there is exactly one place
- * that turns a number into paint parameters, and both call it.
+ * resolved layer config out (opacity, color, gradient stops, blend mode,
+ * tone curve). This is the half of "one engine" that guarantees a slider's
+ * *behavior* can never desync between preview and export: there is exactly
+ * one place that turns a number into paint parameters, and both call it.
  *
  * Every slider is normalized to 0-1 through `sliderToUnitInterval` before
- * it touches any paint math below. Previously the "Light" tab sliders were
+ * it touches any paint math below — previously the "Light" tab sliders were
  * normalized this way while the "Color"/"Texture" layer opacities and the
  * shadow-lift vignette multiplied the raw 0-100 value by a tiny factor
- * directly — two different scales for what should be one concept. That
- * split made it easy for a slider's effect to end up far smaller than
- * intended. Everything now goes through the same 0-1 stage.
+ * directly. Everything now goes through the same 0-1 stage.
  */
 
 import {
@@ -57,9 +55,18 @@ export interface GradientLayer {
   stops: GradientStop[]
 }
 
+export interface ToneAdjustment {
+  brightness: number
+  contrast: number
+  saturate: number
+}
+
 export interface FilterConfig {
-  /** CSS filter string applied to the base <image>. */
-  baseFilter: string
+  /** Brightness/contrast/saturation applied to the base photo. Rendered as
+   *  a native SVG <filter> (feComponentTransfer + feColorMatrix) rather
+   *  than a CSS `filter()` string — see the comment in FilterStackSvg for
+   *  why. */
+  tone: ToneAdjustment
   layers: {
     blueBase: SolidLayer
     cyanLift: SolidLayer
@@ -91,12 +98,8 @@ export function buildFilterConfig(controls: Controls): FilterConfig {
     contrastSoftUnit * BASE_FILTER.contrastSoftRange
   const saturate = BASE_FILTER.saturateBase
 
-  const baseFilter = `brightness(${brightness.toFixed(3)}) contrast(${contrast.toFixed(
-    3,
-  )}) saturate(${saturate.toFixed(3)})`
-
   return {
-    baseFilter,
+    tone: { brightness, contrast, saturate },
     layers: {
       blueBase: {
         color: COLORS.blueBase,

@@ -24,20 +24,17 @@ import { saveBlob } from "@/lib/export/saveBlob";
 
 function formatDateStamp(date: Date) {
 	const pad2 = (n: number) => String(n).padStart(2, "0");
-	return `${date.getFullYear()}.${pad2(date.getMonth() + 1)}.${pad2(
-		date.getDate()
-	)}`;
+	return `${date.getFullYear()}.${pad2(date.getMonth() + 1)}.${pad2(date.getDate())}`;
 }
 
 export default function Page() {
 	const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(null);
-	const [photoSize, setPhotoSize] = useState<{ w: number; h: number } | null>(
-		null
-	);
+	const [photoSize, setPhotoSize] = useState<{ w: number; h: number } | null>(null);
 	const [controls, setControls] = useState<ControlsType>({
 		...DEFAULT_CONTROLS,
 	});
 	const [isExporting, setIsExporting] = useState(false);
+	const [exportError, setExportError] = useState<string | null>(null);
 
 	const dateStr = useMemo(() => formatDateStamp(new Date()), []);
 
@@ -53,10 +50,7 @@ export default function Page() {
 			const probeImage = new Image();
 			probeImage.crossOrigin = "anonymous";
 			probeImage.onload = () => {
-				setPhotoSize({
-					w: probeImage.naturalWidth,
-					h: probeImage.naturalHeight,
-				});
+				setPhotoSize({ w: probeImage.naturalWidth, h: probeImage.naturalHeight });
 				setPhotoDataUrl(dataUrl);
 			};
 			probeImage.src = dataUrl;
@@ -72,6 +66,7 @@ export default function Page() {
 	const handleExport = useCallback(async () => {
 		if (!photoDataUrl || !photoSize || isExporting) return;
 		setIsExporting(true);
+		setExportError(null);
 		try {
 			const blob = await renderToBlob({
 				imgSrc: photoDataUrl,
@@ -83,6 +78,7 @@ export default function Page() {
 			saveBlob(blob, `atom-${dateStr.replace(/\./g, "")}.jpg`);
 		} catch (err) {
 			console.error("Export failed:", (err as Error).message);
+			setExportError("Export failed — please try again.");
 		} finally {
 			setIsExporting(false);
 		}
@@ -112,6 +108,20 @@ export default function Page() {
 						className="font-mono text-[10px] uppercase tracking-[0.25em] text-atom-muted transition-colors hover:text-atom-text"
 					>
 						Replace image
+					</button>
+				</div>
+			)}
+
+			{exportError && (
+				<div className="flex items-center justify-center gap-3 bg-red-500/10 px-4 py-2 text-center font-mono text-[11px] uppercase tracking-[0.15em] text-red-300">
+					<span>{exportError}</span>
+					<button
+						type="button"
+						onClick={() => setExportError(null)}
+						className="text-red-300/70 hover:text-red-300"
+						aria-label="Dismiss error"
+					>
+						Dismiss
 					</button>
 				</div>
 			)}

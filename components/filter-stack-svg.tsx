@@ -38,17 +38,6 @@ interface FilterStackSvgProps {
 	/** unique suffix so multiple instances (preview + off-screen export) don't
 	 *  collide on <defs> ids in the same document. */
 	idSuffix?: string;
-	/**
-	 * Display-only: caps the rendered height so a tall portrait photo stays
-	 * inside the viewport on small screens instead of pushing the controls
-	 * off-screen. Must default to false and NEVER be passed from the export
-	 * path (offscreenRenderer.tsx) — this component's markup is serialized
-	 * verbatim for export, so any inline style set here would be baked into
-	 * the exported SVG too. The width/height props (natural pixel
-	 * resolution) are unaffected either way; this only scales the on-screen
-	 * CSS box.
-	 */
-	constrainToViewport?: boolean;
 }
 
 /** Rough monospace width estimate used as the initial stamp position before
@@ -65,7 +54,6 @@ export function FilterStackSvg({
 	showStamp = true,
 	dateStr,
 	idSuffix = "live",
-	constrainToViewport = false,
 }: FilterStackSvgProps) {
 	const config = buildFilterConfig(controls);
 
@@ -103,6 +91,7 @@ export function FilterStackSvg({
 	const verticalsId = `atom-verticals-${idSuffix}`;
 	const reflectionId = `atom-reflection-${idSuffix}`;
 	const shadowId = `atom-shadow-${idSuffix}`;
+	const toneFilterId = `atom-tone-${idSuffix}`;
 
 	const verticalsStripWidth = (width * VERTICALS.stripePercent) / 100;
 	const verticalsLineWidth = Math.max(
@@ -117,6 +106,10 @@ export function FilterStackSvg({
 			? rawGrainTileSize
 			: 1;
 
+	// Contrast, as CSS `contrast()` defines it: out = (in - 0.5) * amount + 0.5.
+	const { brightness, contrast, saturate } = config.tone;
+	const contrastIntercept = 0.5 - 0.5 * contrast;
+
 	const renderGradientStops = (stops: GradientStop[], color: string) =>
 		stops.map((s, i) => (
 			<stop
@@ -128,19 +121,46 @@ export function FilterStackSvg({
 		));
 
 	return (
+		// Always fills its parent box (width/height: 100%) and preserves the
+		// photo's aspect ratio via viewBox + preserveAspectRatio. Callers control
+		// the actual on-screen size by sizing the parent element (see
+		// Preview.tsx, which uses a CSS aspect-ratio box capped by max-height on
+		// small screens) — auto-sizing an <svg> via width:auto/height:auto plus
+		// max-height is inconsistently supported on mobile Safari, so we don't
+		// rely on it here.
 		<svg
 			viewBox={`0 0 ${width} ${height}`}
 			width={width}
 			height={height}
 			xmlns="http://www.w3.org/2000/svg"
-			style={
-				constrainToViewport
-					? { display: "block", width: "auto", height: "auto", maxWidth: "100%", maxHeight: "60vh" }
-					: { display: "block", width: "100%", height: "auto" }
-			}
+			style={{ display: "block", width: "100%", height: "100%" }}
 			preserveAspectRatio="xMidYMid meet"
 		>
 			<defs>
+				{/*
+				  Brightness/contrast/saturation as a native SVG filter rather than
+				  CSS `filter: brightness() contrast() saturate()`. Mobile Safari has
+				  historically been unreliable applying the CSS Filter Effects
+				  functions to SVG content (especially once mix-blend-mode layers are
+				  stacked on top), which is why the "Light" tab sliders could look
+				  correct on desktop and barely register on an iPhone. feComponentTransfer
+				  + feColorMatrix are baseline SVG 1.1 and render consistently across
+				  engines, including older WebKit.
+				*/}
+				<filter id={toneFilterId} colorInterpolationFilters="sRGB">
+					<feComponentTransfer>
+						<feFuncR type="linear" slope={brightness} intercept={0} />
+						<feFuncG type="linear" slope={brightness} intercept={0} />
+						<feFuncB type="linear" slope={brightness} intercept={0} />
+					</feComponentTransfer>
+					<feComponentTransfer>
+						<feFuncR type="linear" slope={contrast} intercept={contrastIntercept} />
+						<feFuncG type="linear" slope={contrast} intercept={contrastIntercept} />
+						<feFuncB type="linear" slope={contrast} intercept={contrastIntercept} />
+					</feComponentTransfer>
+					<feColorMatrix type="saturate" values={String(saturate)} />
+				</filter>
+
 				<pattern
 					id={grainId} //grain
 					patternUnits="userSpaceOnUse"
@@ -193,7 +213,7 @@ export function FilterStackSvg({
 				width={width}
 				height={height}
 				preserveAspectRatio="xMidYMid slice"
-				style={{ filter: config.baseFilter }}
+				filter={`url(#${toneFilterId})`}
 			/>
 
 			{/* blueBase */}

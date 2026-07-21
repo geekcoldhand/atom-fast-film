@@ -3,33 +3,38 @@
 /**
  * lib/export/offscreenRenderer.tsx
  *
- * Renders the export at full resolution using the SAME <FilterStackSvg>
- * component the live preview uses — mounted off-screen at
- * naturalWidth x naturalHeight, serialized with XMLSerializer (genuine SVG,
- * NOT a foreignObject-wrapped DOM capture), and rasterized to a canvas.
+ * Renders the export directly onto a <canvas> using native Canvas 2D APIs —
+ * drawImage, globalCompositeOperation (which accepts the exact same blend
+ * mode names as CSS mix-blend-mode: "multiply", "screen", "overlay",
+ * "soft-light"), gradients, and ctx.filter for brightness/contrast/
+ * saturation. Every value comes from the same buildFilterConfig() the live
+ * preview uses, so a slider's *behavior* still can't desync between preview
+ * and export — only the paint API differs.
  *
- * Why not foreignObject: a canvas that ever received a foreignObject-sourced
- * image is permanently tainted — toDataURL/toBlob throw SecurityError
- * regardless of CORS. Native SVG (rect/pattern/image/text, data: URIs only)
- * never triggers that rule, so this is one renderer expressed once, not a
- * second paint implementation.
+ * WHY NOT REUSE THE SVG (history): the previous version of this file built
+ * the export by mounting <FilterStackSvg> off-screen, serializing it with
+ * XMLSerializer, and rasterizing the resulting SVG through `new Image()` +
+ * drawImage — the same document containing both the base photo and the
+ * grain texture as nested `<image href="data:...">` elements. On iPhone
+ * Safari this reliably failed on the first export per page load: the two
+ * *image* elements silently came back blank while every SVG-native
+ * primitive (rects, gradients, filters, text) rendered correctly, producing
+ * a plausible-looking but photo-less result — not blank enough for a
+ * blank-canvas check to catch, but wrong. This is a known category of
+ * WebKit bug (nested raster resources inside an SVG that's itself loaded as
+ * an <img> can be dropped on first decode). Painting directly onto canvas
+ * sidesteps it entirely: drawImage() on a canvas is a basic, reliable
+ * operation with none of the "SVG loaded as an image containing more
+ * images" indirection that triggered the bug.
  *
- * MOBILE SAFARI NOTE: the very first export after a fresh page load can
- * come back as a flat, empty frame (only the canvas's navy pre-fill shows),
- * and this reproduces even with grain untouched — it's not specific to any
- * one layer. The pattern (fails once, succeeds immediately after) points to
- * WebKit not having finished decoding/rasterizing the embedded photo (and,
- * for the grain layer, its nested turbulence-filter texture) by the moment
- * the outer SVG gets serialized and reloaded as a flat <img>. We mitigate
- * this two ways below: (1) explicitly decode() every embedded image before
- * ever serializing, and (2) verify the rasterized canvas actually has photo
- * content in it and transparently retry once if it doesn't, since we can't
- * fully guarantee (1) covers every WebKit timing quirk.
+ * The live preview is unaffected by any of this — it still renders
+ * <FilterStackSvg> directly in the DOM, which is a different, unaffected
+ * code path (confirmed working, including on iPhone, after the tone-filter
+ * fix in filter-stack-svg.tsx).
  */
 
-import { createRoot } from "react-dom/client"
-import { FilterStackSvg } from "@/components/filter-stack-svg"
-import { GRAIN_DATA_URI } from "@/lib/rendering/constants"
+import { buildFilterConfig } from "@/lib/rendering/filterConfig"
+import { GRAIN, GRAIN_DATA_URI, STAMP, VERTICALS } from "@/lib/rendering/constants"
 import type { Controls } from "@/lib/constants/controls"
 
 interface RenderArgs {
@@ -41,134 +46,221 @@ interface RenderArgs {
   quality?: number
 }
 
-const CANVAS_PREFILL_COLOR = "#04122e"
-
-const waitForNextPaint = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
-
-/** Loads and decodes a data: URI, resolving even if decode() isn't supported
- *  or the load fails — this is a best-effort warm-up, never a hard gate. */
-function preloadAndDecode(dataUri: string): Promise<void> {
-  return new Promise<void>((resolve) => {
+/** Loads and fully decodes an image from a data: URI. */
+function loadImage(dataUri: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
     const image = new Image()
     image.onload = () => {
       if (typeof image.decode === "function") {
-        image.decode().then(resolve).catch(() => resolve())
+        image.decode().then(
+          () => resolve(image),
+          () => resolve(image), // decode() failing isn't fatal — onload already fired
+        )
       } else {
-        resolve()
+        resolve(image)
       }
     }
-    image.onerror = () => resolve()
+    image.onerror = () => reject(new Error("Failed to load image"))
     image.src = dataUri
   })
 }
 
-// The grain texture is a fixed constant, so its decode only needs warming
-// once per page load rather than once per export.
-let grainTextureReadyPromise: Promise<void> | null = null
-function ensureGrainTextureDecoded(): Promise<void> {
-  if (!grainTextureReadyPromise) {
-    grainTextureReadyPromise = preloadAndDecode(GRAIN_DATA_URI)
-  }
-  return grainTextureReadyPromise
-}
-
-let exportCounter = 0
-
-/** Renders the FilterStackSvg tree off-screen and rasterizes it into the
- *  given canvas. Returns false (without throwing) if the raster came back
- *  as an unpainted blank frame, so the caller can decide whether to retry. */
-async function renderOnceToCanvas(args: RenderArgs, canvas: HTMLCanvasElement): Promise<boolean> {
-  const { imgSrc, controls, width, height, dateStr } = args
-
-  const offscreenHost = document.createElement("div")
-  offscreenHost.setAttribute("aria-hidden", "true")
-  offscreenHost.style.cssText = `position:fixed;left:-99999px;top:0;width:${width}px;height:${height}px;pointer-events:none;opacity:0;`
-  document.body.appendChild(offscreenHost)
-
-  const reactRoot = createRoot(offscreenHost)
-
-  // A fresh id suffix per attempt so overlapping/retried exports can never
-  // collide on <defs> ids (pattern/gradient ids must be unique per document).
-  const exportIdSuffix = `export-${Date.now()}-${exportCounter++}`
-
-  try {
-    reactRoot.render(
-      <FilterStackSvg
-        imgSrc={imgSrc}
-        controls={controls}
-        width={width}
-        height={height}
-        dateStr={dateStr}
-        idSuffix={exportIdSuffix}
-      />,
-    )
-
-    // Let React commit and the stamp-measuring layout effect settle before
-    // we serialize, so getComputedTextLength has already run.
-    await waitForNextPaint()
-    await waitForNextPaint()
-
-    const svgElement = offscreenHost.querySelector("svg")
-    if (!svgElement) throw new Error("Export SVG failed to mount")
-
-    const serializedSvg = new XMLSerializer().serializeToString(svgElement)
-    const svgDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(serializedSvg)}`
-
-    const rasterImage = new Image()
-    rasterImage.crossOrigin = "anonymous"
-    await new Promise<void>((resolve, reject) => {
-      rasterImage.onload = () => resolve()
-      rasterImage.onerror = () => reject(new Error("Failed to load export SVG image"))
-      rasterImage.src = svgDataUrl
+/**
+ * The grain tile SVG (a single <filter>+<rect>, no nested <image>) is safe
+ * to rasterize via the img-src route — the WebKit failure mode above is
+ * specific to SVGs that themselves embed OTHER raster images. It's also a
+ * fixed constant, so we only ever need to build it once per page load.
+ */
+let grainTileCanvasPromise: Promise<HTMLCanvasElement> | null = null
+function getGrainTileCanvas(): Promise<HTMLCanvasElement> {
+  if (!grainTileCanvasPromise) {
+    grainTileCanvasPromise = loadImage(GRAIN_DATA_URI).then((image) => {
+      const tile = document.createElement("canvas")
+      tile.width = image.naturalWidth || 120
+      tile.height = image.naturalHeight || 120
+      const tileCtx = tile.getContext("2d")
+      if (tileCtx) tileCtx.drawImage(image, 0, 0)
+      return tile
     })
-
-    if (rasterImage.naturalWidth === 0 || rasterImage.naturalHeight === 0) {
-      return false
-    }
-
-    const ctx = canvas.getContext("2d")
-    if (!ctx) throw new Error("Canvas 2D context unavailable")
-    // JPEG has no alpha — fill so any transparent edge is black, not garbage.
-    ctx.fillStyle = CANVAS_PREFILL_COLOR
-    ctx.fillRect(0, 0, width, height)
-    ctx.drawImage(rasterImage, 0, 0, width, height)
-
-    return canvasLooksPainted(ctx, width, height)
-  } finally {
-    reactRoot.unmount()
-    offscreenHost.remove()
   }
+  return grainTileCanvasPromise
 }
 
-/** Samples a small grid of pixels and checks whether they're all exactly
- *  the pre-fill color — i.e. drawImage effectively drew nothing. A real
- *  photo essentially never matches this dark navy across every sample
- *  point, so this is a cheap, reliable "did the export actually paint"
- *  check without needing to know anything about the photo's content. */
-function canvasLooksPainted(ctx: CanvasRenderingContext2D, width: number, height: number): boolean {
-  const prefill = hexToRgb(CANVAS_PREFILL_COLOR)
-  const samplePoints: Array<[number, number]> = [
-    [width * 0.1, height * 0.1],
-    [width * 0.5, height * 0.5],
-    [width * 0.9, height * 0.9],
-    [width * 0.1, height * 0.9],
-    [width * 0.9, height * 0.1],
-  ]
+/** Draws `image` into the target rect using cover-fit (fills the rect,
+ *  cropping overflow, centered) — equivalent to preserveAspectRatio
+ *  "xMidYMid slice" on an SVG <image>. */
+function drawImageCover(
+  ctx: CanvasRenderingContext2D,
+  image: CanvasImageSource,
+  naturalWidth: number,
+  naturalHeight: number,
+  targetX: number,
+  targetY: number,
+  targetWidth: number,
+  targetHeight: number,
+) {
+  const scale = Math.max(targetWidth / naturalWidth, targetHeight / naturalHeight)
+  const drawWidth = naturalWidth * scale
+  const drawHeight = naturalHeight * scale
+  const drawX = targetX + (targetWidth - drawWidth) / 2
+  const drawY = targetY + (targetHeight - drawHeight) / 2
 
-  for (const [x, y] of samplePoints) {
-    const [r, g, b] = ctx.getImageData(Math.floor(x), Math.floor(y), 1, 1).data
-    const matchesPrefill = Math.abs(r - prefill.r) <= 2 && Math.abs(g - prefill.g) <= 2 && Math.abs(b - prefill.b) <= 2
-    if (!matchesPrefill) return true // found real image content
+  ctx.save()
+  ctx.beginPath()
+  ctx.rect(targetX, targetY, targetWidth, targetHeight)
+  ctx.clip()
+  ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight)
+  ctx.restore()
+}
+
+/** Fills the whole canvas with a color/gradient under a given blend mode +
+ *  opacity — the canvas equivalent of one of FilterStackSvg's <rect> layers. */
+function paintLayer(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  fillStyle: string | CanvasGradient | CanvasPattern,
+  blend: GlobalCompositeOperation,
+  opacity: number,
+) {
+  if (opacity <= 0) return
+  ctx.save()
+  ctx.globalCompositeOperation = blend
+  ctx.globalAlpha = opacity
+  ctx.fillStyle = fillStyle
+  ctx.fillRect(0, 0, width, height)
+  ctx.restore()
+}
+
+/** Builds a CanvasGradient matching an objectBoundingBox linear gradient
+ *  (top to bottom) with per-stop opacity, same shape as REFLECTION.stops. */
+function buildVerticalGradient(
+  ctx: CanvasRenderingContext2D,
+  height: number,
+  color: string,
+  stops: readonly { offset: number; opacity: number }[],
+) {
+  const gradient = ctx.createLinearGradient(0, 0, 0, height)
+  for (const stop of stops) {
+    gradient.addColorStop(stop.offset, withAlpha(color, stop.opacity))
   }
-  return false // every sample point was the untouched background — blank export
+  return gradient
 }
 
-function hexToRgb(hex: string) {
-  const value = parseInt(hex.slice(1), 16)
-  return { r: (value >> 16) & 255, g: (value >> 8) & 255, b: value & 255 }
+/** Builds a CanvasGradient matching an objectBoundingBox radial gradient
+ *  (cx=0.5, cy=0.5, r=0.75), same shape as SHADOW_CONTROL.stops. Uses a
+ *  scaled coordinate space so the ellipse matches a non-square frame the
+ *  same way SVG's objectBoundingBox radial gradients do. */
+function paintRadialLayer(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  color: string,
+  stops: readonly { offset: number; opacity: number }[],
+  blend: GlobalCompositeOperation,
+  opacity: number,
+) {
+  if (opacity <= 0) return
+  ctx.save()
+  ctx.translate(width / 2, height / 2)
+  ctx.scale(width / 2, height / 2)
+  const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, 0.75)
+  for (const stop of stops) {
+    gradient.addColorStop(stop.offset, withAlpha(color, stop.opacity))
+  }
+  ctx.globalCompositeOperation = blend
+  ctx.globalAlpha = opacity
+  ctx.fillStyle = gradient
+  ctx.fillRect(-1, -1, 2, 2)
+  ctx.restore()
 }
 
-/** Builds the export SVG off-screen and rasterizes it to a JPEG data URL. */
+function withAlpha(hexColor: string, alpha: number): string {
+  const value = parseInt(hexColor.slice(1), 16)
+  const r = (value >> 16) & 255
+  const g = (value >> 8) & 255
+  const b = value & 255
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
+
+function paintGrainLayer(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  grainTileCanvas: HTMLCanvasElement,
+  tileSize: number,
+  blend: GlobalCompositeOperation,
+  opacity: number,
+) {
+  if (opacity <= 0) return
+  // Scale the (fixed-resolution) grain tile canvas to the target tile size
+  // via an intermediate canvas, then tile it with createPattern.
+  const scaledTile = document.createElement("canvas")
+  scaledTile.width = Math.max(1, Math.round(tileSize))
+  scaledTile.height = Math.max(1, Math.round(tileSize))
+  const scaledCtx = scaledTile.getContext("2d")
+  if (!scaledCtx) return
+  scaledCtx.drawImage(grainTileCanvas, 0, 0, scaledTile.width, scaledTile.height)
+
+  const pattern = ctx.createPattern(scaledTile, "repeat")
+  if (!pattern) return
+  paintLayer(ctx, width, height, pattern, blend, opacity)
+}
+
+function paintVerticalsLayer(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  lineColor: string,
+  blend: GlobalCompositeOperation,
+  opacity: number,
+) {
+  if (opacity <= 0) return
+  const stripeWidth = (width * VERTICALS.stripePercent) / 100
+  const lineWidth = Math.max(0.5, stripeWidth * VERTICALS.lineFraction)
+
+  const tile = document.createElement("canvas")
+  tile.width = Math.max(1, Math.round(stripeWidth))
+  tile.height = 1
+  const tileCtx = tile.getContext("2d")
+  if (!tileCtx) return
+  tileCtx.fillStyle = lineColor
+  tileCtx.fillRect(0, 0, lineWidth, 1)
+
+  const pattern = ctx.createPattern(tile, "repeat")
+  if (!pattern) return
+  paintLayer(ctx, width, height, pattern, blend, opacity)
+}
+
+function paintStamp(ctx: CanvasRenderingContext2D, width: number, height: number, dateStr: string | undefined) {
+  const dateText = dateStr ?? ""
+  if (!dateText) return
+
+  const shorterSide = Math.min(width, height)
+  const fontSize = Math.min(STAMP.fontSizeMax, Math.max(STAMP.fontSizeMin, shorterSide * STAMP.fontSizeFactor))
+  const gapPx = fontSize * STAMP.gapEm
+  const rightX = width - width * STAMP.rightPercent
+  const baselineY = height - height * STAMP.bottomPercent
+
+  ctx.save()
+  ctx.translate(rightX, baselineY)
+  ctx.rotate((STAMP.rotationDeg * Math.PI) / 180)
+  ctx.textAlign = "right"
+  ctx.textBaseline = "alphabetic"
+  ctx.fillStyle = STAMP.ink
+
+  ctx.font = `${fontSize}px ${STAMP.fontFamily}`
+  const dateTextWidth = ctx.measureText(dateText).width
+
+  ctx.font = `500 ${fontSize}px ${STAMP.fontFamily}`
+  ctx.fillText(STAMP.wordmark, -dateTextWidth - gapPx, 0)
+
+  ctx.font = `${fontSize}px ${STAMP.fontFamily}`
+  ctx.fillText(dateText, 0, 0)
+  ctx.restore()
+}
+
+/** Renders the export and resolves with a JPEG data URL. */
 export async function renderExportDataUrl({
   imgSrc,
   controls,
@@ -177,27 +269,68 @@ export async function renderExportDataUrl({
   dateStr,
   quality = 0.92,
 }: RenderArgs): Promise<string> {
-  // Warm up decoding for both embedded raster resources before we ever
-  // serialize the export SVG.
-  await Promise.all([ensureGrainTextureDecoded(), preloadAndDecode(imgSrc)])
+  const config = buildFilterConfig(controls)
+
+  const [photoImage, grainTileCanvas] = await Promise.all([loadImage(imgSrc), getGrainTileCanvas()])
 
   const canvas = document.createElement("canvas")
   canvas.width = width
   canvas.height = height
+  const ctx = canvas.getContext("2d")
+  if (!ctx) throw new Error("Canvas 2D context unavailable")
 
-  const maxAttempts = 3
-  let paintedSuccessfully = false
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    paintedSuccessfully = await renderOnceToCanvas({ imgSrc, controls, width, height, dateStr, quality }, canvas)
-    if (paintedSuccessfully) break
-    // Give the browser a beat to finish whatever decode work it was still
-    // doing, then try the whole render again.
-    await waitForNextPaint()
-  }
+  // Base photo, with brightness/contrast/saturation applied via Canvas 2D's
+  // native `filter`, which (unlike CSS filter on an SVG element) has always
+  // been reliable across engines including mobile Safari.
+  ctx.save()
+  ctx.filter = `brightness(${config.tone.brightness}) contrast(${config.tone.contrast}) saturate(${config.tone.saturate})`
+  drawImageCover(ctx, photoImage, photoImage.naturalWidth, photoImage.naturalHeight, 0, 0, width, height)
+  ctx.restore()
 
-  if (!paintedSuccessfully) {
-    throw new Error("Export rendered a blank frame after multiple attempts")
-  }
+  paintLayer(ctx, width, height, config.layers.blueBase.color, config.layers.blueBase.blend as GlobalCompositeOperation, config.layers.blueBase.opacity)
+  paintLayer(ctx, width, height, config.layers.cyanLift.color, config.layers.cyanLift.blend as GlobalCompositeOperation, config.layers.cyanLift.opacity)
+
+  paintLayer(
+    ctx,
+    width,
+    height,
+    buildVerticalGradient(ctx, height, config.layers.reflection.color, config.layers.reflection.stops),
+    config.layers.reflection.blend as GlobalCompositeOperation,
+    config.layers.reflection.opacity,
+  )
+
+  const rawGrainTileSize = (width * GRAIN.tilePercent) / 100
+  const grainTileSize = Number.isFinite(rawGrainTileSize) && rawGrainTileSize > 0 ? rawGrainTileSize : 1
+  paintGrainLayer(
+    ctx,
+    width,
+    height,
+    grainTileCanvas,
+    grainTileSize,
+    config.layers.grain.blend as GlobalCompositeOperation,
+    config.layers.grain.opacity,
+  )
+
+  paintVerticalsLayer(
+    ctx,
+    width,
+    height,
+    config.layers.verticals.lineColor,
+    config.layers.verticals.blend as GlobalCompositeOperation,
+    config.layers.verticals.opacity,
+  )
+
+  paintRadialLayer(
+    ctx,
+    width,
+    height,
+    config.layers.shadowControl.color,
+    config.layers.shadowControl.stops,
+    config.layers.shadowControl.blend as GlobalCompositeOperation,
+    config.layers.shadowControl.opacity,
+  )
+
+  paintStamp(ctx, width, height, dateStr)
 
   return canvas.toDataURL("image/jpeg", quality)
 }

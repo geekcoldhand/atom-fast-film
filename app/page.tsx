@@ -75,7 +75,7 @@ export default function Page() {
 				height: photoSize.h,
 				dateStr,
 			});
-			saveBlob(blob, `atom-${dateStr.replace(/\./g, "")}.jpg`);
+			await saveBlob(blob, `atom-${dateStr.replace(/\./g, "")}.jpg`);
 		} catch (err) {
 			console.error("Export failed:", (err as Error).message);
 			setExportError("Export failed — please try again.");

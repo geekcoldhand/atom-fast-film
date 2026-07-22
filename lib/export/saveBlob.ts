@@ -19,6 +19,7 @@ export async function saveBlob(blob: Blob, filename: string) {
     typeof navigator !== "undefined" &&
     typeof navigator.share === "function" &&
     typeof navigator.canShare === "function" &&
+    navigator.maxTouchPoints > 0 &&
     navigator.canShare({ files: [file] })
 
   if (canShareFile) {

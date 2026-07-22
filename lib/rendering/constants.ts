@@ -10,7 +10,7 @@
 
 export const COLORS = {
   blueBase: "#0b2a63",
-  cyanLift: "#1aa5c9",
+  cyanLift: "#7da5be",
   reflectionLight: "#dff3ff",
   shadowNavy: "#04122e",
   stampInk: "#704c2c",
@@ -74,14 +74,14 @@ export const SHADOW_CONTROL = {
 export const GRAIN = {
   blend: "overlay" as const,
   opacityFactor: 0.9, // opacity = grainUnit * opacityFactor, capped below
-  opacityCap: 0.65,
-  tilePercent: 22, // pattern tile size as a % of the frame's shorter side
+  opacityCap: 0.90,
+  tilePercent: 18, // pattern tile size as a % of the frame's shorter side
 } as const
 
 export const VERTICALS = {
   blend: "soft-light" as const,
   opacityFactor: 1.2,
-  opacityCap: 0.85,
+  opacityCap: 0.75,
   lineColor: "#e8f6ff",
   stripePercent: 0.7, // one stripe cycle as a % of width
   lineFraction: 0.1, // fraction of a cycle the line itself occupies

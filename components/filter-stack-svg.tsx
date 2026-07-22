@@ -26,6 +26,7 @@ import {
 	buildFilterConfig,
 	type GradientStop,
 } from "@/lib/rendering/filterConfig";
+import { computeStampLayout } from "@/lib/rendering/stampLayout";
 import type { Controls } from "@/lib/constants/controls";
 
 interface FilterStackSvgProps {
@@ -40,12 +41,6 @@ interface FilterStackSvgProps {
 	idSuffix?: string;
 }
 
-/** Rough monospace width estimate used as the initial stamp position before
- *  `getComputedTextLength` (below) measures the real rendered width. */
-function estimateMonospaceTextWidth(text: string, fontSize: number) {
-	return text.length * fontSize * 0.6;
-}
-
 export function FilterStackSvg({
 	imgSrc,
 	controls,
@@ -56,22 +51,19 @@ export function FilterStackSvg({
 	idSuffix = "live",
 }: FilterStackSvgProps) {
 	const config = buildFilterConfig(controls);
-
-	const stampFrameShorterSide = Math.min(width, height);
-	const stampFontSize = Math.min(
-		STAMP.fontSizeMax,
-		Math.max(STAMP.fontSizeMin, stampFrameShorterSide * STAMP.fontSizeFactor)
-	);
-	const stampGapPx = stampFontSize * STAMP.gapEm;
-	const stampRightX = width - width * STAMP.rightPercent;
-	const stampBaselineY = height - height * STAMP.bottomPercent;
 	const dateText = dateStr ?? "";
 
-	// Measure the date's real rendered width off the live text node, falling
-	// back to a monospace estimate until the layout effect below runs.
+	// Shared with the export path (offscreenRenderer.tsx) so the stamp's
+	// size/position can never disagree between preview and export, and so it
+	// scales consistently — and never runs off-frame — across image sizes.
+	const stampLayout = computeStampLayout(width, height, dateText);
+
+	// Measure the date's real rendered width off the live text node for
+	// crisp final positioning; the layout's own estimate (used above for the
+	// shrink-to-fit decision) is the fallback until this effect runs.
 	const dateTextRef = useRef<SVGTextElement>(null);
-	const [dateTextWidth, setDateTextWidth] = useState(() =>
-		estimateMonospaceTextWidth(dateText, stampFontSize)
+	const [dateTextWidth, setDateTextWidth] = useState(
+		() => dateText.length * stampLayout.fontSize * 0.6
 	);
 
 	useLayoutEffect(() => {
@@ -85,7 +77,7 @@ export function FilterStackSvg({
 				/* getComputedTextLength can throw before layout has run; keep the estimate */
 			}
 		}
-	}, [dateText, stampFontSize, dateTextWidth]);
+	}, [dateText, stampLayout.fontSize, dateTextWidth]);
 
 	const grainId = `atom-grain-${idSuffix}`;
 	const verticalsId = `atom-verticals-${idSuffix}`;
@@ -284,26 +276,26 @@ export function FilterStackSvg({
 
 			{/* stamp */}
 			{showStamp && dateText && (
-				<g transform={`rotate(${STAMP.rotationDeg} ${stampRightX} ${stampBaselineY})`}>
+				<g transform={`rotate(${STAMP.rotationDeg} ${stampLayout.rightX} ${stampLayout.baselineY})`}>
 					<text
-						x={stampRightX - dateTextWidth - stampGapPx}
-						y={stampBaselineY}
+						x={stampLayout.rightX - dateTextWidth - stampLayout.gapPx}
+						y={stampLayout.baselineY}
 						textAnchor="end"
 						fill={STAMP.ink}
 						fontFamily={STAMP.fontFamily}
-						fontSize={stampFontSize}
+						fontSize={stampLayout.fontSize}
 						style={{ userSelect: "none", fontWeight: 500 }}
 					>
 						{STAMP.wordmark}
 					</text>
 					<text
 						ref={dateTextRef}
-						x={stampRightX}
-						y={stampBaselineY}
+						x={stampLayout.rightX}
+						y={stampLayout.baselineY}
 						textAnchor="end"
 						fill={STAMP.ink}
 						fontFamily={STAMP.fontFamily}
-						fontSize={stampFontSize}
+						fontSize={stampLayout.fontSize}
 						style={{ userSelect: "none" }}
 					>
 						{dateText}

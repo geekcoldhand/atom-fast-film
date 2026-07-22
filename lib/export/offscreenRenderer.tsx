@@ -35,6 +35,7 @@
 
 import { buildFilterConfig } from "@/lib/rendering/filterConfig"
 import { GRAIN, GRAIN_DATA_URI, STAMP, VERTICALS } from "@/lib/rendering/constants"
+import { computeStampLayout } from "@/lib/rendering/stampLayout"
 import type { Controls } from "@/lib/constants/controls"
 
 interface RenderArgs {
@@ -236,11 +237,10 @@ function paintStamp(ctx: CanvasRenderingContext2D, width: number, height: number
   const dateText = dateStr ?? ""
   if (!dateText) return
 
-  const shorterSide = Math.min(width, height)
-  const fontSize = Math.min(STAMP.fontSizeMax, Math.max(STAMP.fontSizeMin, shorterSide * STAMP.fontSizeFactor))
-  const gapPx = fontSize * STAMP.gapEm
-  const rightX = width - width * STAMP.rightPercent
-  const baselineY = height - height * STAMP.bottomPercent
+  // Same layout function the live preview uses (filter-stack-svg.tsx) —
+  // guarantees the export's stamp size/position can never drift from what
+  // was shown in preview, and scales/fits consistently across image sizes.
+  const { fontSize, gapPx, rightX, baselineY } = computeStampLayout(width, height, dateText)
 
   ctx.save()
   ctx.translate(rightX, baselineY)

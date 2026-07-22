@@ -10,7 +10,7 @@
 
 export const COLORS = {
   blueBase: "#0b2a63",
-  cyanLift: "#7da5be",
+  cyanLift: "#1aa5c9",
   reflectionLight: "#dff3ff",
   shadowNavy: "#04122e",
   stampInk: "#704c2c",
@@ -74,14 +74,14 @@ export const SHADOW_CONTROL = {
 export const GRAIN = {
   blend: "overlay" as const,
   opacityFactor: 0.9, // opacity = grainUnit * opacityFactor, capped below
-  opacityCap: 0.90,
-  tilePercent: 18, // pattern tile size as a % of the frame's shorter side
+  opacityCap: 0.65,
+  tilePercent: 22, // pattern tile size as a % of the frame's shorter side
 } as const
 
 export const VERTICALS = {
   blend: "soft-light" as const,
   opacityFactor: 1.2,
-  opacityCap: 0.75,
+  opacityCap: 0.85,
   lineColor: "#e8f6ff",
   stripePercent: 0.7, // one stripe cycle as a % of width
   lineFraction: 0.1, // fraction of a cycle the line itself occupies
@@ -90,12 +90,16 @@ export const VERTICALS = {
 export const STAMP = {
   ink: COLORS.stampInk,
   fontFamily: '"Bold Courier New", Courier, monospace',
-  fontSizeFactor: 0.52, // fraction of the frame's shorter side
-  fontSizeMin: 19,
-  fontSizeMax: 62,
-  gapEm: 0.7, // gap between wordmark and date, in em
-  rightPercent: 0.03, // distance from the right edge, as a fraction of width
-  bottomPercent: 0.19, // distance from the bottom edge, as a fraction of height
+  // Fraction of the frame's shorter side, before min/max clamping below.
+  // Tuned so a typical photo (roughly 1500-6000px on its short side) sits
+  // well inside the min/max range instead of pinned to one clamp.
+  fontSizeFactor: 0.024,
+  fontSizeMin: 14, // floor for very small images — stays legible
+  fontSizeMax: 130, // ceiling for very large images — stays proportionate
+  gapEm: 0.7, // gap between wordmark and date, in units of font size
+  marginRightEm: 0.9, // distance from the right edge, in units of font size
+  marginBottomEm: 1.6, // distance from the bottom edge, in units of font size
+  topSafetyPercent: 0.04, // the stamp's run may never enter this % of the top edge
   rotationDeg: 270,
   wordmark: "AT0M",
 } as const

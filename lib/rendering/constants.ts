@@ -9,8 +9,8 @@
  */
 
 export const COLORS = {
-  blueBase: "#0b2a63",
-  cyanLift: "#1aa5c9",
+  blueBase: "##09438e",
+  cyanLift: "#56b9d1",
   reflectionLight: "#dff3ff",
   shadowNavy: "#04122e",
   stampInk: "#704c2c",
@@ -98,7 +98,7 @@ export const STAMP = {
   fontSizeMax: 130, // ceiling for very large images — stays proportionate
   gapEm: 0.7, // gap between wordmark and date, in units of font size
   marginRightEm: 0.9, // distance from the right edge, in units of font size
-  marginBottomEm: 1.6, // distance from the bottom edge, in units of font size
+  marginBottomEm: 10.6, // distance from the bottom edge, in units of font size
   topSafetyPercent: 0.04, // the stamp's run may never enter this % of the top edge
   rotationDeg: 270,
   wordmark: "AT0M",

@@ -14,6 +14,7 @@ import { Header } from "@/components/header";
 import { Preview } from "@/components/preview";
 import { Controls } from "@/components/controls";
 import { ProcessingOverlay } from "@/components/processing-overlay";
+import { DateEditor, type DateSource } from "@/components/date-editor";
 import {
 	DEFAULT_CONTROLS,
 	type ControlKey,
@@ -21,6 +22,7 @@ import {
 } from "@/lib/constants/controls";
 import { renderToBlob } from "@/lib/export/renderToBlob";
 import { saveBlob } from "@/lib/export/saveBlob";
+import { readPhotoDate } from "@/lib/metadata/readPhotoDate";
 
 function formatDateStamp(date: Date) {
 	const pad2 = (n: number) => String(n).padStart(2, "0");
@@ -35,8 +37,10 @@ export default function Page() {
 	});
 	const [isExporting, setIsExporting] = useState(false);
 	const [exportError, setExportError] = useState<string | null>(null);
+	const [photoDate, setPhotoDate] = useState<Date>(() => new Date());
+	const [dateSource, setDateSource] = useState<DateSource>("today");
 
-	const dateStr = useMemo(() => formatDateStamp(new Date()), []);
+	const dateStr = useMemo(() => formatDateStamp(photoDate), [photoDate]);
 
 	const updateControl = useCallback((key: ControlKey, value: number) => {
 		setControls((prev) => ({ ...prev, [key]: value }));
@@ -56,11 +60,28 @@ export default function Page() {
 			probeImage.src = dataUrl;
 		};
 		reader.readAsDataURL(file);
+
+		readPhotoDate(file).then((exifDate) => {
+			if (exifDate) {
+				setPhotoDate(exifDate);
+				setDateSource("exif");
+			} else {
+				setPhotoDate(new Date());
+				setDateSource("today");
+			}
+		});
 	}, []);
 
 	const handleReset = useCallback(() => {
 		setPhotoDataUrl(null);
 		setPhotoSize(null);
+		setPhotoDate(new Date());
+		setDateSource("today");
+	}, []);
+
+	const handleDateChange = useCallback((date: Date) => {
+		setPhotoDate(date);
+		setDateSource("manual");
 	}, []);
 
 	const handleExport = useCallback(async () => {
@@ -101,7 +122,7 @@ export default function Page() {
 			/>
 
 			{photoDataUrl && (
-				<div className="flex justify-center px-4 pb-1">
+				<div className="flex items-center justify-between px-4 pb-1">
 					<button
 						type="button"
 						onClick={handleReset}
@@ -109,6 +130,7 @@ export default function Page() {
 					>
 						Replace image
 					</button>
+					<DateEditor date={photoDate} source={dateSource} onChange={handleDateChange} />
 				</div>
 			)}
 

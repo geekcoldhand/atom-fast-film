@@ -75,7 +75,7 @@ export const GRAIN = {
 	blend: "overlay" as const,
 	opacityFactor: 0.9, // opacity = grainUnit * opacityFactor, capped below
 	opacityCap: 0.85,
-	tilePercent: 18, // pattern tile size as a % of the frame's shorter side
+	tilePercent: 12, // pattern tile size as a % of the frame's shorter side
 } as const;
 
 export const VERTICALS = {
@@ -98,7 +98,7 @@ export const STAMP = {
 	fontSizeMax: 130, // ceiling for very large images — stays proportionate
 	gapEm: 0.7, // gap between wordmark and date, in units of font size
 	marginRightEm: 0.9, // distance from the right edge, in units of font size
-	marginBottomEm: 10.6, // distance from the bottom edge, in units of font size
+	marginBottomEm: 20.6, // distance from the bottom edge, in units of font size
 	topSafetyPercent: 0.04, // the stamp's run may never enter this % of the top edge
 	rotationDeg: 270,
 	wordmark: "AT0M",
